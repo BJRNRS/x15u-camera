@@ -1,11 +1,13 @@
 package app.x15u.probe;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.Typeface;
@@ -24,6 +26,7 @@ import android.util.Range;
 import android.util.Size;
 import android.util.SizeF;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -52,6 +55,7 @@ public class MainActivity extends Activity {
     private TextView out;
     private String report = "";
     private Uri savedUri;
+    private boolean running;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -69,13 +73,16 @@ public class MainActivity extends Activity {
         copy.setOnClickListener(v -> copyReport());
 
         Button share = new Button(this);
-        share.setText("Als Datei teilen");
+        share.setText("Teilen");
         share.setOnClickListener(v -> shareReport());
 
-        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        bar.addView(copy, half);
-        bar.addView(share, half);
+        Button test = new Button(this);
+        test.setText("Aufloesungstest");
+        test.setOnClickListener(v -> startExperiment());
+
+        bar.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        bar.addView(share, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        bar.addView(test, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.4f));
 
         out = new TextView(this);
         out.setTypeface(Typeface.MONOSPACE);
@@ -110,6 +117,52 @@ public class MainActivity extends Activity {
     }
 
     // ---------------------------------------------------------------- Aktionen
+
+    private void startExperiment() {
+        if (running) return;
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
+            return;
+        }
+        runExperiment();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != 1) return;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            runExperiment();
+        } else {
+            Toast.makeText(this, "Ohne Kamera-Berechtigung kein Test", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void runExperiment() {
+        if (running) return;
+        running = true;
+        report = "";
+        savedUri = null;
+        out.setText("Aufloesungstest laeuft, App bitte offen lassen (1 bis 3 Minuten) ...\n\n");
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        new Thread(() -> {
+            String r;
+            try {
+                Experiment experiment = new Experiment(this,
+                        line -> runOnUiThread(() -> out.append(line + "\n")));
+                r = experiment.run();
+            } catch (Throwable t) {
+                r = "Fehler im Test: " + t;
+            }
+            final String result = r;
+            runOnUiThread(() -> {
+                report = result;
+                out.setText(result);
+                running = false;
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            });
+        }).start();
+    }
 
     private void copyReport() {
         if (report.isEmpty()) return;
