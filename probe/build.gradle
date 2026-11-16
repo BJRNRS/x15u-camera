@@ -1,0 +1,43 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.x15u.probe'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.x15u.probe'
+        minSdk 31
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // Fester Schluessel im Repo, damit jede von GitHub gebaute APK gleich signiert ist
+    // und sich ohne Deinstallation ueber die vorige Version installieren laesst.
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}

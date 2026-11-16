@@ -1,0 +1,46 @@
+name: APK bauen
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: APK bauen
+        run: |
+          chmod +x gradlew
+          ./gradlew :probe:assembleDebug --stacktrace
+
+      - name: APK umbenennen
+        run: cp probe/build/outputs/apk/debug/probe-debug.apk kamera-diagnose.apk
+
+      - name: APK als Artefakt ablegen
+        uses: actions/upload-artifact@v4
+        with:
+          name: kamera-diagnose
+          path: kamera-diagnose.apk
+
+      - name: Release "latest" aktualisieren
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest kamera-diagnose.apk \
+            --target "$GITHUB_SHA" \
+            --title "Aktueller Build" \
+            --notes "Automatisch gebaut aus Commit $GITHUB_SHA. APK auf dem Handy herunterladen und installieren."
