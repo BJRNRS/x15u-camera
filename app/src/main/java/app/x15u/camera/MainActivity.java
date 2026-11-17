@@ -14,7 +14,9 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraMetadata;
 import android.os.Bundle;
+import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.OrientationEventListener;
 import android.view.TextureView;
 import android.view.View;
@@ -53,6 +55,9 @@ public class MainActivity extends Activity implements CameraController.Listener 
     private static final String[] WB_SHORT = {"Auto", "Tag", "Wolke", "Schatten", "Kunst", "Leucht"};
 
     private static final String[] MODE_NAMES = {"RAW", "LOOK", "RAW + LOOK"};
+    private static final String[] ASPECT_NAMES = {"4:3", "3:2", "16:9", "1:1"};
+    private static final String[] ASPECT_MP = {"12,6 MP", "11,2 MP", "9,4 MP", "9,4 MP"};
+    private static final float[] ASPECTS = {4f / 3f, 1.5f, 16f / 9f, 1f};
     private static final int SEEK_MAX = 1000;
     private static final long SHORTEST_EXPOSURE = 125_000L; // 1/8000 s
 
@@ -71,10 +76,13 @@ public class MainActivity extends Activity implements CameraController.Listener 
     private boolean askedPermission;
     private boolean updatingSeek;
     private boolean grid;
+    private int aspectIndex;
 
     private TextureView preview;
     private View flash;
     private GridView gridView;
+    private CropMask cropMask;
+    private FocusRing focusRing;
     private TextView info;
     private TextView status;
     private TextView[] modeChips;
@@ -95,6 +103,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
     private TextView directStandard;
     private TextView directDirect;
     private TextView gridToggle;
+    private TextView[] aspectChoices;
 
     private OrientationEventListener orientationListener;
 
@@ -136,6 +145,80 @@ public class MainActivity extends Activity implements CameraController.Listener 
         }
     }
 
+    /** Dunkelt die Bereiche ab, die beim gewaehlten Seitenverhaeltnis wegfallen. */
+    private static final class CropMask extends View {
+        private final Paint paint = new Paint();
+        private float ratio = 4f / 3f;
+
+        CropMask(Context context) {
+            super(context);
+            paint.setColor(0xB0000000);
+        }
+
+        void setRatio(float value) {
+            ratio = value;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float w = getWidth();
+            float h = getHeight();
+            float current = h / w;
+            if (Math.abs(ratio - current) < 0.01f) return;
+            if (ratio > current) {
+                float keep = h / ratio;
+                float bar = (w - keep) / 2f;
+                canvas.drawRect(0, 0, bar, h, paint);
+                canvas.drawRect(w - bar, 0, w, h, paint);
+            } else {
+                float keep = w * ratio;
+                float bar = (h - keep) / 2f;
+                canvas.drawRect(0, 0, w, bar, paint);
+                canvas.drawRect(0, h - bar, w, h, paint);
+            }
+        }
+    }
+
+    /** Quadrat am Fokuspunkt: gelb beim Suchen, gruen bei scharf, rot wenn nicht scharf. */
+    private static final class FocusRing extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private float x;
+        private float y;
+        private boolean visible;
+
+        FocusRing(Context context) {
+            super(context);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f * context.getResources().getDisplayMetrics().density);
+        }
+
+        void show(float px, float py, int color) {
+            x = px;
+            y = py;
+            visible = true;
+            paint.setColor(color);
+            invalidate();
+        }
+
+        void setColor(int color) {
+            paint.setColor(color);
+            invalidate();
+        }
+
+        void hide() {
+            visible = false;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            if (!visible) return;
+            float r = 34f * getResources().getDisplayMetrics().density;
+            canvas.drawRect(x - r, y - r, x + r, y + r, paint);
+        }
+    }
+
     // -------------------------------------------------------------- Lebenszyklus
 
     @Override
@@ -172,6 +255,8 @@ public class MainActivity extends Activity implements CameraController.Listener 
         if (lens >= 0 && lens < controller.lenses.size()) controller.lensIndex = lens;
         controller.direct = prefs.getBoolean("direct", false);
         grid = prefs.getBoolean("grid", false);
+        aspectIndex = Math.max(0, Math.min(ASPECTS.length - 1, prefs.getInt("aspect", 0)));
+        controller.aspect = ASPECTS[aspectIndex];
     }
 
     private void savePrefs() {
@@ -181,6 +266,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
                 .putInt("lens", controller.lensIndex)
                 .putBoolean("direct", controller.direct)
                 .putBoolean("grid", grid)
+                .putInt("aspect", aspectIndex)
                 .apply();
     }
 
@@ -269,8 +355,14 @@ public class MainActivity extends Activity implements CameraController.Listener 
         preview = new TextureView(this);
         frame.addView(preview, match());
 
+        cropMask = new CropMask(this);
+        frame.addView(cropMask, match());
+
         gridView = new GridView(this);
         frame.addView(gridView, match());
+
+        focusRing = new FocusRing(this);
+        frame.addView(focusRing, match());
 
         flash = new View(this);
         flash.setBackgroundColor(0xFF000000);
@@ -290,6 +382,26 @@ public class MainActivity extends Activity implements CameraController.Listener 
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         statusParams.bottomMargin = dp(8);
         frame.addView(status, statusParams);
+
+        final GestureDetector taps = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+
+            @Override
+            public boolean onSingleTapUp(MotionEvent e) {
+                onPreviewTap(e.getX(), e.getY(), frame.getWidth(), frame.getHeight());
+                return true;
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                resetFocusPoint();
+                return true;
+            }
+        });
+        frame.setOnTouchListener((v, event) -> taps.onTouchEvent(event));
 
         preview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
@@ -575,6 +687,26 @@ public class MainActivity extends Activity implements CameraController.Listener 
         body.setPadding(dp(20), dp(8), dp(20), dp(20));
         column.addView(body);
 
+        body.addView(sectionTitle("FORMAT (LOOK-JPEG)"));
+        LinearLayout aspectRow = new LinearLayout(this);
+        aspectChoices = new TextView[ASPECTS.length];
+        for (int i = 0; i < ASPECTS.length; i++) {
+            final int index = i;
+            TextView t = choice(ASPECT_NAMES[i] + "\n" + ASPECT_MP[i]);
+            t.setTextSize(13);
+            t.setOnClickListener(v -> selectAspect(index));
+            if (i > 0) aspectRow.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+            aspectRow.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            aspectChoices[i] = t;
+        }
+        body.addView(aspectRow);
+        TextView aspectNote = text("4:3 nutzt die volle Sensorfläche mit 12,6 MP, das Maximum, das Xiaomi "
+                + "fremden Apps freigibt. Die anderen Formate sind mittige Ausschnitte daraus. "
+                + "RAW bleibt immer 4:3.", 13, MUTED);
+        aspectNote.setGravity(Gravity.START);
+        aspectNote.setPadding(0, dp(10), 0, 0);
+        body.addView(aspectNote);
+
         body.addView(sectionTitle("RASTER"));
         gridToggle = choice("");
         gridToggle.setOnClickListener(v -> {
@@ -607,6 +739,12 @@ public class MainActivity extends Activity implements CameraController.Listener 
         storage.setPadding(0, dp(24), 0, 0);
         body.addView(storage);
         return overlay;
+    }
+
+    private void selectAspect(int index) {
+        aspectIndex = index;
+        controller.aspect = ASPECTS[index];
+        refreshAll();
     }
 
     private void setDirect(boolean value) {
@@ -675,6 +813,13 @@ public class MainActivity extends Activity implements CameraController.Listener 
         lookButton.setAlpha(raw ? 0.4f : 1f);
 
         gridView.setVisibility(grid ? View.VISIBLE : View.GONE);
+        // Ausschnitt nur zeigen, wenn ein JPEG entsteht; RAW ist immer 4:3.
+        cropMask.setRatio(raw ? 4f / 3f : ASPECTS[aspectIndex]);
+        for (int i = 0; i < aspectChoices.length; i++) {
+            boolean selected = i == aspectIndex;
+            aspectChoices[i].setBackground(rounded(selected ? 0xFFFFFFFF : PANEL, 12));
+            aspectChoices[i].setTextColor(selected ? 0xFF000000 : 0xFFFFFFFF);
+        }
         gridToggle.setText(grid ? "Drittel-Raster: an" : "Drittel-Raster: aus");
         gridToggle.setBackground(rounded(grid ? 0xFF3A3A3C : PANEL, 12));
         directStandard.setBackground(rounded(controller.direct ? PANEL : 0xFFFFFFFF, 12));
@@ -705,7 +850,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
             case P_TIME:
                 return controller.manualExposure != null;
             case P_FOCUS:
-                return controller.manualFocus != null;
+                return controller.manualFocus != null || controller.focusRegion != null;
             case P_WB:
                 return wbIndex != 0;
             default:
@@ -730,7 +875,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
             }
             case P_FOCUS: {
                 Float focus = controller.manualFocus;
-                if (focus == null) return "AF";
+                if (focus == null) return controller.focusRegion != null ? "Punkt" : "AF";
                 if (focus < 0.05f) return "∞";
                 return String.format(Locale.US, "%.1f m", 1f / focus);
             }
@@ -751,7 +896,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
             }
             case P_FOCUS: {
                 Float focus = controller.manualFocus;
-                if (focus == null) return "Autofokus";
+                if (focus == null) return controller.focusRegion != null ? "Fokuspunkt" : "Autofokus";
                 if (focus < 0.05f) return "Unendlich";
                 return String.format(Locale.US, "%.2f m", 1f / focus);
             }
@@ -779,6 +924,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
         if (controller.lensIndex == index) return;
         controller.lensIndex = index;
         controller.manualFocus = null;
+        focusRing.hide();
         refreshAll();
         syncSeek();
         controller.restart();
@@ -804,6 +950,7 @@ public class MainActivity extends Activity implements CameraController.Listener 
                 break;
             case P_FOCUS:
                 controller.manualFocus = null;
+                resetFocusPoint();
                 break;
             case P_WB:
                 wbIndex = 0;
@@ -839,6 +986,8 @@ public class MainActivity extends Activity implements CameraController.Listener 
                 break;
             }
             case P_FOCUS:
+                controller.focusRegion = null;
+                focusRing.hide();
                 controller.manualFocus = lens.minFocusDiopters * t * t;
                 break;
             case P_WB:
@@ -908,6 +1057,68 @@ public class MainActivity extends Activity implements CameraController.Listener 
         updatingSeek = false;
         sliderLabel.setText(longValue(param));
         refreshParamValues();
+    }
+
+    // ------------------------------------------------------------------- Fokus
+
+    /** Antippen: dorthin fokussieren und dort belichten. Doppeltippen: zurueck zum Autofokus. */
+    private void onPreviewTap(float x, float y, int width, int height) {
+        CameraController.Lens lens = controller.currentLens();
+        if (lens == null || width <= 0 || height <= 0) return;
+        if (lookMenu.getVisibility() == View.VISIBLE || settingsMenu.getVisibility() == View.VISIBLE) return;
+        float u = x / width;
+        float v = y / height;
+        float sx;
+        float sy;
+        switch (lens.sensorOrientation) {
+            case 270:
+                sx = 1f - v;
+                sy = u;
+                break;
+            case 180:
+                sx = 1f - u;
+                sy = 1f - v;
+                break;
+            case 0:
+                sx = u;
+                sy = v;
+                break;
+            default:
+                sx = v;
+                sy = 1f - u;
+                break;
+        }
+        controller.manualFocus = null;
+        focusRing.show(x, y, ACCENT);
+        controller.focusAt(sx, sy);
+        refreshAll();
+        syncSeek();
+    }
+
+    private void resetFocusPoint() {
+        focusRing.hide();
+        controller.clearFocus();
+        refreshAll();
+        syncSeek();
+    }
+
+    @Override
+    public void onFocus(int state) {
+        switch (state) {
+            case -1:
+                focusRing.hide();
+                refreshAll();
+                break;
+            case 1:
+                focusRing.setColor(0xFF4CD964);
+                break;
+            case 2:
+                focusRing.setColor(0xFFFF3B30);
+                break;
+            default:
+                focusRing.setColor(ACCENT);
+                break;
+        }
     }
 
     // ------------------------------------------------------------------ Aufnahme

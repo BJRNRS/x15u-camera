@@ -96,8 +96,38 @@ final class Saver {
     }
 
     /** Wendet den Look auf das Kamera-JPEG an und speichert das Ergebnis mit den Aufnahmedaten. */
-    static void saveJpeg(Context context, String name, byte[] source, Look look) throws Exception {
-        if (look == null || look.identity) {
+    /**
+     * Schneidet mittig auf das Seitenverhaeltnis zu (lange zu kurze Seite). Funktioniert
+     * unabhaengig davon, ob das Bild hoch oder quer gespeichert ist.
+     */
+    static Bitmap crop(Bitmap bitmap, float ratio) {
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+        boolean landscape = w >= h;
+        int longSide = landscape ? w : h;
+        int shortSide = landscape ? h : w;
+        float current = longSide / (float) shortSide;
+        if (Math.abs(ratio - current) < 0.01f) return bitmap;
+        if (ratio > current) {
+            shortSide = Math.round(longSide / ratio);
+        } else {
+            longSide = Math.round(shortSide * ratio);
+        }
+        int nw = landscape ? longSide : shortSide;
+        int nh = landscape ? shortSide : longSide;
+        Bitmap cropped = Bitmap.createBitmap(bitmap, (w - nw) / 2, (h - nh) / 2, nw, nh);
+        if (!cropped.isMutable()) {
+            Bitmap copy = cropped.copy(Bitmap.Config.ARGB_8888, true);
+            if (cropped != bitmap) cropped.recycle();
+            cropped = copy;
+        }
+        if (cropped != bitmap) bitmap.recycle();
+        return cropped;
+    }
+
+    static void saveJpeg(Context context, String name, byte[] source, Look look, float aspect) throws Exception {
+        boolean fullFrame = Math.abs(aspect - 4f / 3f) < 0.01f;
+        if ((look == null || look.identity) && fullFrame) {
             write(context, insert(context, name, "image/jpeg"), source);
             return;
         }
@@ -106,6 +136,7 @@ final class Saver {
         options.inPreferredConfig = Bitmap.Config.ARGB_8888;
         Bitmap bitmap = BitmapFactory.decodeByteArray(source, 0, source.length, options);
         if (bitmap == null) throw new IllegalStateException("Kamerabild nicht lesbar");
+        bitmap = crop(bitmap, aspect);
         Uri uri;
         try {
             LookEngine.apply(bitmap, look);
@@ -117,7 +148,7 @@ final class Saver {
         } finally {
             bitmap.recycle();
         }
-        copyExif(context, source, uri, look);
+        copyExif(context, source, uri, look == null ? new Look(Look.NATURAL, "Standard") : look);
     }
 
     private static void copyExif(Context context, byte[] source, Uri target, Look look) {

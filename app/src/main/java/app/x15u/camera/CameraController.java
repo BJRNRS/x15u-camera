@@ -2,6 +2,7 @@ package app.x15u.camera;
 
 import android.content.Context;
 import android.graphics.ImageFormat;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -12,6 +13,7 @@ import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
+import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -55,6 +57,9 @@ final class CameraController {
         void onStatus(String text);
 
         void onBusy(boolean busy);
+
+        /** -1 = kein Fokuspunkt, 0 = sucht, 1 = scharf, 2 = nicht scharf. */
+        void onFocus(int state);
     }
 
     static final class Lens {
@@ -72,6 +77,7 @@ final class CameraController {
         int evMax;
         float evStep;
         int sensorOrientation;
+        Rect active;
     }
 
     private static final class Pending {
@@ -84,6 +90,7 @@ final class CameraController {
         Image raw;
         byte[] jpeg;
         TotalCaptureResult result;
+        float aspect;
         boolean saving;
     }
 
@@ -104,6 +111,12 @@ final class CameraController {
     volatile Float manualFocus;
     volatile int awbMode = CameraMetadata.CONTROL_AWB_MODE_AUTO;
     volatile int ev;
+    /** Seitenverhaeltnis der JPEGs als lange zu kurze Seite (RAW bleibt immer 4:3). */
+    volatile float aspect = 4f / 3f;
+    /** Gewaehlter Fokus- und Messpunkt, null = durchgehender Autofokus. */
+    volatile MeteringRectangle focusRegion;
+    private volatile boolean focusPending;
+    private Rect logicalActive;
 
     // Zustand: nur auf dem Kamera-Thread.
     private HandlerThread thread;
@@ -139,6 +152,11 @@ final class CameraController {
         } catch (Throwable ignored) {
         }
         if (ids.isEmpty()) ids.add(LOGICAL_ID);
+        try {
+            logicalActive = cm.getCameraCharacteristics(LOGICAL_ID)
+                    .get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        } catch (Throwable ignored) {
+        }
         for (String id : ids) {
             try {
                 Lens lens = readLens(id);
@@ -210,6 +228,7 @@ final class CameraController {
 
         Integer orientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION);
         lens.sensorOrientation = orientation != null ? orientation : 90;
+        lens.active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
         return lens;
     }
 
@@ -267,6 +286,23 @@ final class CameraController {
         if (h != null) h.post(this::startPreview);
     }
 
+    /** Fokus- und Messpunkt setzen; Koordinaten 0..1 im Sensorbild. */
+    void focusAt(float sensorX, float sensorY) {
+        Handler h = handler;
+        if (h != null) h.post(() -> doFocus(sensorX, sensorY));
+    }
+
+    /** Zurueck zum durchgehenden Autofokus. */
+    void clearFocus() {
+        focusRegion = null;
+        focusPending = false;
+        Handler h = handler;
+        if (h != null) h.post(() -> {
+            sendTrigger(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
+            startPreview();
+        });
+    }
+
     void capture(int deviceOrientation) {
         Handler h = handler;
         if (h != null) h.post(() -> doCapture(deviceOrientation));
@@ -320,6 +356,11 @@ final class CameraController {
             return;
         }
         closeAll();
+        if (focusRegion != null) {
+            focusRegion = null;
+            focusPending = false;
+            ui.post(() -> listener.onFocus(-1));
+        }
         if (!started || texture == null) return;
         active = currentLens();
         if (active == null) {
@@ -456,7 +497,13 @@ final class CameraController {
         }
 
         Float focus = manualFocus;
-        if (focus == null) {
+        MeteringRectangle region = focusRegion;
+        if (focus == null && region != null) {
+            MeteringRectangle[] regions = {region};
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
+            builder.set(CaptureRequest.CONTROL_AF_REGIONS, regions);
+            builder.set(CaptureRequest.CONTROL_AE_REGIONS, regions);
+        } else if (focus == null) {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
         } else {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
@@ -464,6 +511,43 @@ final class CameraController {
         }
 
         builder.set(CaptureRequest.CONTROL_AWB_MODE, awbMode);
+    }
+
+    private void doFocus(float sx, float sy) {
+        if (session == null || device == null || active == null) return;
+        Rect a = !activeDirect && logicalActive != null ? logicalActive : active.active;
+        if (a == null) return;
+        int size = Math.max(a.width(), a.height()) / 10;
+        int cx = a.left + Math.round(Math.max(0f, Math.min(1f, sx)) * a.width());
+        int cy = a.top + Math.round(Math.max(0f, Math.min(1f, sy)) * a.height());
+        int left = Math.max(a.left, Math.min(a.right - size, cx - size / 2));
+        int top = Math.max(a.top, Math.min(a.bottom - size, cy - size / 2));
+        manualFocus = null;
+        focusRegion = new MeteringRectangle(left, top, size, size, MeteringRectangle.METERING_WEIGHT_MAX);
+        sendTrigger(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
+        sendTrigger(CameraMetadata.CONTROL_AF_TRIGGER_START);
+        focusPending = true;
+        ui.post(() -> listener.onFocus(0));
+        startPreview();
+        final MeteringRectangle mine = focusRegion;
+        handler.postDelayed(() -> {
+            if (focusPending && focusRegion == mine) {
+                focusPending = false;
+                ui.post(() -> listener.onFocus(2));
+            }
+        }, 3000);
+    }
+
+    private void sendTrigger(int trigger) {
+        if (session == null || device == null || previewSurface == null || active == null) return;
+        try {
+            CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            builder.addTarget(previewSurface);
+            applySettings(builder, active);
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, trigger);
+            session.capture(builder.build(), null, handler);
+        } catch (Throwable ignored) {
+        }
     }
 
     private void startPreview() {
@@ -486,6 +570,15 @@ final class CameraController {
     }
 
     private void onPreviewResult(Lens lens, TotalCaptureResult result) {
+        if (focusPending) {
+            Integer af = result.get(CaptureResult.CONTROL_AF_STATE);
+            if (af != null && (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+                    || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)) {
+                focusPending = false;
+                final int state = af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ? 1 : 2;
+                ui.post(() -> listener.onFocus(state));
+            }
+        }
         CaptureResult source = physicalResult(result, lens);
         Integer iso = source.get(CaptureResult.SENSOR_SENSITIVITY);
         Long exposure = source.get(CaptureResult.SENSOR_EXPOSURE_TIME);
@@ -537,6 +630,7 @@ final class CameraController {
             p.wantRaw = rawReader != null;
             p.wantJpeg = jpegReader != null;
             p.look = look;
+            p.aspect = aspect;
             p.orientation = (lens.sensorOrientation + deviceOrientation + 360) % 360;
 
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
@@ -681,7 +775,7 @@ final class CameraController {
             try {
                 Look l = p.look;
                 String suffix = l == null || l.identity ? "" : "_" + l.fileTag();
-                Saver.saveJpeg(context, base + suffix + ".jpg", p.jpeg, l);
+                Saver.saveJpeg(context, base + suffix + ".jpg", p.jpeg, l, p.aspect);
                 message.append("JPEG gespeichert").append(l == null || l.identity ? "" : " (" + l.name + ")");
             } catch (Throwable t) {
                 message.append("JPEG FEHLER: ").append(t.getMessage());
