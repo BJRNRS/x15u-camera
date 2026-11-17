@@ -680,7 +680,7 @@ final class CameraController {
             if (message.length() > 0) message.append("  ·  ");
             try {
                 Look l = p.look;
-                String suffix = l == null || l.identity ? "" : "_" + l.name.replace(' ', '-');
+                String suffix = l == null || l.identity ? "" : "_" + l.fileTag();
                 Saver.saveJpeg(context, base + suffix + ".jpg", p.jpeg, l);
                 message.append("JPEG gespeichert").append(l == null || l.identity ? "" : " (" + l.name + ")");
             } catch (Throwable t) {

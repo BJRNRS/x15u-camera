@@ -7,6 +7,13 @@ package app.x15u.camera;
  */
 final class Look {
 
+    static final String NATURAL = "Natuerlich";
+    static final String COLOR = "Farbe";
+    static final String FILM = "Film";
+    static final String MONO = "Schwarzweiss";
+    static final String[] CATEGORIES = {NATURAL, COLOR, FILM, MONO};
+
+    final String category;
     final String name;
     boolean identity;
 
@@ -37,8 +44,14 @@ final class Look {
     /** Korn 0..1. */
     float grain = 0f;
 
-    Look(String name) {
+    Look(String category, String name) {
+        this.category = category;
         this.name = name;
+    }
+
+    /** Dateiname-taugliche Form des Namens. */
+    String fileTag() {
+        return name.replaceAll("[^A-Za-z0-9]+", "-");
     }
 
     Look sat(float v) {
@@ -100,30 +113,73 @@ final class Look {
     }
 
     static Look[] all() {
-        Look standard = new Look("Standard");
+        Look standard = new Look(NATURAL, "Standard");
         standard.identity = true;
         return new Look[]{
+                // --- Natuerlich
                 standard,
                 // Zurueckhaltend und ehrlich: etwas weniger Saettigung, sanfter Kontrast, leichte Randabdunklung.
-                new Look("Natur").sat(0.92f).contrast(0.18f).warmth(0.03f).vignette(0.12f),
-                // Kraeftige Farben, knackiger Kontrast.
-                new Look("Lebendig").sat(1.28f).contrast(0.30f),
+                new Look(NATURAL, "Natur").sat(0.92f).contrast(0.18f).warmth(0.03f).vignette(0.12f),
                 // Neutral, weich, offene Schatten, saubere Hauttoene.
-                new Look("Nordisch").sat(0.96f).contrast(-0.10f).fade(0.02f, 1f).warmth(-0.02f)
+                new Look(NATURAL, "Nordisch").sat(0.96f).contrast(-0.10f).fade(0.02f, 1f).warmth(-0.02f)
                         .highlights(0.010f, 0.006f, 0f),
+                // Flach und hell, viel Zeichnung in Schatten und Lichtern.
+                new Look(NATURAL, "Weich").sat(0.94f).contrast(-0.22f).fade(0.03f, 0.99f),
+                // Warme, gedaempfte Hauttoene, sanfter Kontrast.
+                new Look(NATURAL, "Portraet").sat(0.88f).contrast(0.08f).warmth(0.05f).tint(0.02f)
+                        .highlights(0.012f, 0.004f, -0.004f).vignette(0.10f),
+
+                // --- Farbe
+                // Kraeftige Farben, knackiger Kontrast.
+                new Look(COLOR, "Lebendig").sat(1.28f).contrast(0.30f),
+                // Tiefe, satte Farben mit dunklen Schatten.
+                new Look(COLOR, "Satt").sat(1.40f).contrast(0.45f).vignette(0.12f),
+                // Warm und farbig.
+                new Look(COLOR, "Sommer").sat(1.18f).contrast(0.20f).warmth(0.12f)
+                        .highlights(0.020f, 0.008f, -0.010f),
+                // Petrol in den Schatten, warme Lichter.
+                new Look(COLOR, "Kino").sat(1.05f).contrast(0.32f)
+                        .shadows(-0.025f, 0.006f, 0.030f).highlights(0.028f, 0.010f, -0.020f).vignette(0.18f),
+                // Hell, matt, zarte Farben.
+                new Look(COLOR, "Pastell").sat(0.72f).contrast(-0.12f).fade(0.08f, 1f).warmth(0.02f)
+                        .highlights(0.008f, 0.004f, 0.010f),
+
+                // --- Film
                 // Gedeckte Farben, harter Kontrast, kuehle Schatten.
-                new Look("Chrom").sat(0.74f).contrast(0.42f).shadows(-0.012f, 0f, 0.022f).vignette(0.15f),
+                new Look(FILM, "Chrom").sat(0.74f).contrast(0.42f).shadows(-0.012f, 0f, 0.022f).vignette(0.15f),
                 // Warm, matt, mit Korn.
-                new Look("Warmfilm").sat(0.90f).contrast(0.12f).fade(0.05f, 0.97f).warmth(0.10f)
+                new Look(FILM, "Warmfilm").sat(0.90f).contrast(0.12f).fade(0.05f, 0.97f).warmth(0.10f)
                         .shadows(0f, 0.010f, 0.016f).highlights(0.022f, 0.010f, -0.012f)
                         .grain(0.35f).vignette(0.14f),
                 // Kuehl, leicht gruenliche Schatten, matter Abschluss.
-                new Look("Kuehlfilm").sat(0.86f).contrast(0.16f).fade(0.035f, 0.98f).warmth(-0.07f)
+                new Look(FILM, "Kuehlfilm").sat(0.86f).contrast(0.16f).fade(0.035f, 0.98f).warmth(-0.07f)
                         .shadows(-0.010f, 0.012f, 0.012f).grain(0.25f),
-                // Schwarzweiss, ausgewogen.
-                new Look("Mono").mono(0.30f, 0.59f, 0.11f).contrast(0.22f),
-                // Schwarzweiss wie mit Rotfilter: dunkler Himmel, harter Kontrast, Korn.
-                new Look("Mono hart").mono(0.55f, 0.38f, 0.07f).contrast(0.62f).grain(0.45f).vignette(0.22f),
+                // Diafilm: satt, kontrastreich, leicht magentafarbene Schatten.
+                new Look(FILM, "Dia").sat(1.22f).contrast(0.50f).shadows(0.010f, -0.008f, 0.016f)
+                        .grain(0.20f).vignette(0.16f),
+                // Negativfilm: weiche Kurve, angehobenes Schwarz, gruenliche Schatten.
+                new Look(FILM, "Negativ").sat(0.92f).contrast(0.05f).fade(0.06f, 0.96f).warmth(0.04f)
+                        .shadows(-0.006f, 0.014f, 0.004f).highlights(0.014f, 0.008f, -0.006f).grain(0.30f),
+                // Ausgeblichener Abzug: wenig Farbe, warm, sehr matt.
+                new Look(FILM, "Vintage").sat(0.62f).contrast(-0.05f).fade(0.10f, 0.92f).warmth(0.12f)
+                        .highlights(0.018f, 0.010f, -0.016f).grain(0.40f).vignette(0.22f),
+                // Kuehle Nacht: blaue Schatten, kraeftiger Kontrast.
+                new Look(FILM, "Nacht").sat(0.82f).contrast(0.38f).warmth(-0.10f)
+                        .shadows(-0.016f, 0.000f, 0.032f).grain(0.30f).vignette(0.20f),
+
+                // --- Schwarzweiss
+                // Ausgewogen.
+                new Look(MONO, "Mono").mono(0.30f, 0.59f, 0.11f).contrast(0.22f),
+                // Weich, grau, viel Zeichnung.
+                new Look(MONO, "Mono weich").mono(0.30f, 0.59f, 0.11f).contrast(-0.15f).fade(0.04f, 0.97f),
+                // Wie mit Rotfilter: dunkler Himmel, harter Kontrast, Korn.
+                new Look(MONO, "Mono hart").mono(0.55f, 0.38f, 0.07f).contrast(0.62f).grain(0.45f).vignette(0.22f),
+                // Warm getont wie ein Selenabzug.
+                new Look(MONO, "Selen").mono(0.33f, 0.56f, 0.11f).contrast(0.28f)
+                        .shadows(0.010f, 0.002f, -0.010f).highlights(0.016f, 0.008f, -0.010f).grain(0.20f),
+                // Kalt getont.
+                new Look(MONO, "Blauton").mono(0.30f, 0.59f, 0.11f).contrast(0.25f)
+                        .shadows(-0.012f, -0.002f, 0.020f).highlights(-0.004f, 0f, 0.008f),
         };
     }
 }
