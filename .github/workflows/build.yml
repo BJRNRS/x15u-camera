@@ -21,26 +21,30 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: APK bauen
+      - name: APKs bauen
         run: |
           chmod +x gradlew
-          ./gradlew :probe:assembleDebug --stacktrace
+          ./gradlew :app:assembleDebug :probe:assembleDebug --stacktrace
 
-      - name: APK umbenennen
-        run: cp probe/build/outputs/apk/debug/probe-debug.apk kamera-diagnose.apk
+      - name: APKs umbenennen
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk x15u-kamera.apk
+          cp probe/build/outputs/apk/debug/probe-debug.apk kamera-diagnose.apk
 
-      - name: APK als Artefakt ablegen
+      - name: APKs als Artefakt ablegen
         uses: actions/upload-artifact@v4
         with:
-          name: kamera-diagnose
-          path: kamera-diagnose.apk
+          name: apks
+          path: |
+            x15u-kamera.apk
+            kamera-diagnose.apk
 
       - name: Release "latest" aktualisieren
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest kamera-diagnose.apk \
+          gh release create latest x15u-kamera.apk kamera-diagnose.apk \
             --target "$GITHUB_SHA" \
             --title "Aktueller Build" \
-            --notes "Automatisch gebaut aus Commit $GITHUB_SHA. APK auf dem Handy herunterladen und installieren."
+            --notes "Automatisch gebaut aus Commit $GITHUB_SHA. x15u-kamera.apk ist die Kamera-App, kamera-diagnose.apk das Diagnosewerkzeug."
