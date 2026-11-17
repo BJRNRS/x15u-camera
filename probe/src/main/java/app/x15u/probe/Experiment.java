@@ -6,7 +6,6 @@ import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.OutputConfiguration;
@@ -25,14 +24,13 @@ import java.io.FileReader;
 import java.lang.reflect.Array;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Prueft mit echten Aufnahmen, ob das Geraet mehr als die offiziell gemeldete
@@ -57,7 +55,6 @@ final class Experiment {
     private HandlerThread thread;
     private Handler handler;
     private Executor executor;
-    private volatile boolean deviceBroken;
 
     Experiment(Context context, Progress progress) {
         this.cm = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
@@ -70,7 +67,7 @@ final class Experiment {
         handler = new Handler(thread.getLooper());
         executor = r -> handler.post(r);
         try {
-            say("AUFLOESUNGSTEST v1.1");
+            say("AUFLOESUNGSTEST v1.2");
             say("Geraet:  " + Build.MANUFACTURER + " " + Build.MODEL + " (" + Build.DEVICE + ")");
             say("Android: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + "), " + Build.DISPLAY);
             say("");
@@ -83,6 +80,22 @@ final class Experiment {
                 say("Physische Kameras nicht lesbar: " + msg(t));
             }
             if (ids.isEmpty()) ids.add("0");
+
+            say("=== Kontrolle: logische Kamera 0 ohne Zusatz ===");
+            try {
+                Size b0 = largestRaw(cm.getCameraCharacteristics("0"));
+                if (b0 != null) {
+                    Variant v0 = new Variant("RAW Basis", b0.getWidth(), b0.getHeight(),
+                            ImageFormat.RAW_SENSOR, 0);
+                    say("  " + pad(v0.label, 40) + runVariant("0", null, v0));
+                    Variant j0 = new Variant("JPEG Basis", b0.getWidth(), b0.getHeight(),
+                            ImageFormat.JPEG, 0);
+                    say("  " + pad(j0.label, 40) + runVariant("0", null, j0));
+                }
+            } catch (Throwable t) {
+                say("  FEHLER: " + msg(t));
+            }
+            say("");
 
             for (String id : ids) {
                 try {
@@ -117,15 +130,13 @@ final class Experiment {
         final int height;
         final int format;
         final int vendorLevel;
-        final boolean pixelMode;
 
-        Variant(String label, int width, int height, int format, int vendorLevel, boolean pixelMode) {
+        Variant(String label, int width, int height, int format, int vendorLevel) {
             this.label = label;
             this.width = width;
             this.height = height;
             this.format = format;
             this.vendorLevel = vendorLevel;
-            this.pixelMode = pixelMode;
         }
     }
 
@@ -137,12 +148,7 @@ final class Experiment {
         String[] names = {
                 "org.codeaurora.qcamera3.quadra_cfa.is_qcfa_sensor",
                 "org.codeaurora.qcamera3.quadra_cfa.qcfa_dimension",
-                "org.codeaurora.qcamera3.quadra_cfa.activeArraySize",
-                "org.codeaurora.qcamera3.quadra_cfa.availableStreamConfigurations",
-                "xiaomi.scaler.availableStreamConfigurations",
                 "xiaomi.scaler.availableSuperResolutionStreamConfigurations",
-                "xiaomi.scaler.availableLimitStreamConfigurations",
-                "xiaomi.sensor.info.activeArraySize",
         };
         for (String n : names) {
             say("  " + n + " = " + readCharacteristic(c, n));
@@ -156,64 +162,68 @@ final class Experiment {
         int bw = base.getWidth();
         int bh = base.getHeight();
         int raw = ImageFormat.RAW_SENSOR;
+        int yuv = ImageFormat.YUV_420_888;
+        int jpeg = ImageFormat.JPEG;
+        String s2 = 2 * bw + "x" + 2 * bh;
 
         List<Variant> variants = new ArrayList<>();
-        variants.add(new Variant("RAW " + bw + "x" + bh + " (Basis)", bw, bh, raw, 0, false));
-        variants.add(new Variant("RAW Basis + Schalter", bw, bh, raw, 1, false));
-        variants.add(new Variant("RAW Basis + Schalter + Client", bw, bh, raw, 2, false));
-        variants.add(new Variant("RAW " + 2 * bw + "x" + 2 * bh, 2 * bw, 2 * bh, raw, 0, false));
-        variants.add(new Variant("RAW 2x + Schalter", 2 * bw, 2 * bh, raw, 1, false));
-        variants.add(new Variant("RAW 2x + Schalter + Client", 2 * bw, 2 * bh, raw, 2, false));
-        variants.add(new Variant("RAW 2x + Pixelmodus", 2 * bw, 2 * bh, raw, 2, true));
+        variants.add(new Variant("RAW " + bw + "x" + bh + " (Basis)", bw, bh, raw, 0));
+        variants.add(new Variant("RAW Basis + Schalter", bw, bh, raw, 1));
+        variants.add(new Variant("RAW " + s2, 2 * bw, 2 * bh, raw, 0));
+        variants.add(new Variant("RAW " + s2 + " + Schalter", 2 * bw, 2 * bh, raw, 1));
+        variants.add(new Variant("RAW " + s2 + " + Schalter + Client", 2 * bw, 2 * bh, raw, 2));
+        variants.add(new Variant("YUV " + s2 + " + Schalter + Client", 2 * bw, 2 * bh, yuv, 2));
+        variants.add(new Variant("JPEG " + s2, 2 * bw, 2 * bh, jpeg, 0));
+        variants.add(new Variant("JPEG " + s2 + " + Schalter + Client", 2 * bw, 2 * bh, jpeg, 2));
         if (bw == 4080) {
-            variants.add(new Variant("RAW " + 4 * bw + "x" + 4 * bh + " + Schalter + Client",
-                    4 * bw, 4 * bh, raw, 2, false));
-        }
-        variants.add(new Variant("JPEG 2x + Schalter + Client", 2 * bw, 2 * bh, ImageFormat.JPEG, 2, false));
-
-        String openId = physId;
-        String physical = null;
-        CameraDevice device;
-        try {
-            device = open(physId);
-            say("Direkt oeffnen: OK");
-        } catch (Throwable t) {
-            say("Direkt oeffnen: FEHLER (" + msg(t) + "), nutze logische Kamera 0");
-            openId = "0";
-            physical = physId;
-            device = open("0");
+            String s4 = 4 * bw + "x" + 4 * bh;
+            variants.add(new Variant("JPEG " + s4 + " + Schalter + Client", 4 * bw, 4 * bh, jpeg, 2));
+            variants.add(new Variant("RAW " + s4 + " + Schalter + Client", 4 * bw, 4 * bh, raw, 2));
         }
 
-        try {
-            for (Variant v : variants) {
-                if (deviceBroken) {
-                    closeQuietly(device);
-                    device = null;
-                    deviceBroken = false;
-                    device = open(openId);
-                }
-                String result;
-                try {
-                    result = runVariant(device, physical, v);
-                } catch (Throwable t) {
-                    result = "FEHLER: " + msg(t);
-                }
-                say("  " + pad(v.label, 36) + result);
+        say("Ueber logische Kamera 0 (offizieller Weg):");
+        for (Variant v : variants) {
+            String result;
+            try {
+                result = runVariant("0", physId, v);
+            } catch (Throwable t) {
+                result = "FEHLER: " + msg(t);
             }
-        } finally {
-            closeQuietly(device);
-            deviceBroken = false;
-            Thread.sleep(400);
+            say("  " + pad(v.label, 40) + result);
         }
+
+        say("Direkt geoeffnet:");
+        Variant direct = variants.get(0);
+        String result;
+        try {
+            result = runVariant(physId, null, direct);
+        } catch (Throwable t) {
+            result = "FEHLER: " + msg(t);
+        }
+        say("  " + pad(direct.label, 40) + result);
     }
 
-    private String runVariant(CameraDevice device, String physical, Variant v) throws Exception {
-        ImageReader reader = ImageReader.newInstance(v.width, v.height, v.format, 1);
+    /** Oeffnet die Kamera frisch, startet eine kleine Vorschau und loest ein Einzelbild aus. */
+    private String runVariant(String openId, String physical, Variant v) throws Exception {
+        CameraDevice device = open(openId);
+        ImageReader still = null;
+        ImageReader preview = null;
         final CameraCaptureSession[] session = new CameraCaptureSession[1];
         try {
+            still = ImageReader.newInstance(v.width, v.height, v.format, 1);
+            preview = ImageReader.newInstance(1280, 720, ImageFormat.YUV_420_888, 2);
+
+            final AtomicInteger previewFrames = new AtomicInteger();
+            preview.setOnImageAvailableListener(r -> {
+                try (Image img = r.acquireLatestImage()) {
+                    if (img != null) previewFrames.incrementAndGet();
+                } catch (Throwable ignored) {
+                }
+            }, handler);
+
             final CountDownLatch imageLatch = new CountDownLatch(1);
             final String[] imageInfo = new String[1];
-            reader.setOnImageAvailableListener(r -> {
+            still.setOnImageAvailableListener(r -> {
                 try (Image img = r.acquireNextImage()) {
                     if (img != null) {
                         int bytes = img.getPlanes()[0].getBuffer().remaining();
@@ -226,24 +236,24 @@ final class Experiment {
                 imageLatch.countDown();
             }, handler);
 
-            CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            builder.addTarget(reader.getSurface());
-            applyVendor(builder, v.vendorLevel);
-            if (v.pixelMode) {
-                builder.set(CaptureRequest.SENSOR_PIXEL_MODE,
-                        CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
-            }
+            CaptureRequest.Builder previewRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            previewRequest.addTarget(preview.getSurface());
+            applyVendor(previewRequest, v.vendorLevel);
 
-            OutputConfiguration output = new OutputConfiguration(reader.getSurface());
-            if (physical != null) output.setPhysicalCameraId(physical);
-            if (v.pixelMode) {
-                output.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+            OutputConfiguration previewOut = new OutputConfiguration(preview.getSurface());
+            OutputConfiguration stillOut = new OutputConfiguration(still.getSurface());
+            if (physical != null) {
+                previewOut.setPhysicalCameraId(physical);
+                stillOut.setPhysicalCameraId(physical);
             }
+            List<OutputConfiguration> outputs = new ArrayList<>();
+            outputs.add(previewOut);
+            outputs.add(stillOut);
 
             final CountDownLatch configLatch = new CountDownLatch(1);
             SessionConfiguration config = new SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
-                    Collections.singletonList(output),
+                    outputs,
                     executor,
                     new CameraCaptureSession.StateCallback() {
                         @Override
@@ -257,14 +267,21 @@ final class Experiment {
                             configLatch.countDown();
                         }
                     });
-            config.setSessionParameters(builder.build());
+            config.setSessionParameters(previewRequest.build());
             device.createCaptureSession(config);
 
             if (!configLatch.await(10, TimeUnit.SECONDS)) return "Timeout beim Einrichten";
             if (session[0] == null) return "abgelehnt (Groesse/Format nicht erlaubt)";
 
+            session[0].setRepeatingRequest(previewRequest.build(), null, handler);
+            Thread.sleep(1200);
+
+            CaptureRequest.Builder stillRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            stillRequest.addTarget(still.getSurface());
+            applyVendor(stillRequest, v.vendorLevel);
+
             final String[] captureError = new String[1];
-            session[0].capture(builder.build(), new CameraCaptureSession.CaptureCallback() {
+            session[0].capture(stillRequest.build(), new CameraCaptureSession.CaptureCallback() {
                 @Override
                 public void onCaptureFailed(CameraCaptureSession s, CaptureRequest request,
                                             CaptureFailure failure) {
@@ -273,20 +290,25 @@ final class Experiment {
                 }
             }, handler);
 
-            if (!imageLatch.await(15, TimeUnit.SECONDS)) return "eingerichtet, aber kein Bild (Timeout)";
+            String frames = ", Vorschau-Frames: " + previewFrames.get();
+            if (!imageLatch.await(15, TimeUnit.SECONDS)) {
+                return "eingerichtet, aber kein Bild (Timeout)" + frames;
+            }
             if (imageInfo[0] == null) {
-                return captureError[0] != null ? captureError[0] : "eingerichtet, aber kein Bild";
+                return (captureError[0] != null ? captureError[0] : "eingerichtet, aber kein Bild") + frames;
             }
             return "BILD " + imageInfo[0];
         } finally {
+            closeQuietly(device);
             try {
-                if (session[0] != null) session[0].close();
+                if (still != null) still.close();
             } catch (Throwable ignored) {
             }
             try {
-                reader.close();
+                if (preview != null) preview.close();
             } catch (Throwable ignored) {
             }
+            Thread.sleep(350);
         }
     }
 
@@ -304,22 +326,17 @@ final class Experiment {
             @Override
             public void onDisconnected(CameraDevice d) {
                 error[0] = "Verbindung getrennt";
-                deviceBroken = true;
                 latch.countDown();
             }
 
             @Override
             public void onError(CameraDevice d, int code) {
                 error[0] = "Fehlercode " + code;
-                deviceBroken = true;
                 latch.countDown();
             }
         }, handler);
         if (!latch.await(10, TimeUnit.SECONDS)) throw new Exception("Timeout beim Oeffnen");
-        if (device[0] == null) {
-            deviceBroken = false;
-            throw new Exception(error[0]);
-        }
+        if (device[0] == null) throw new Exception(error[0]);
         return device[0];
     }
 
@@ -425,18 +442,12 @@ final class Experiment {
 
     private void scanConfigFiles() {
         say("=== Kamera-Konfigurationsdateien ===");
-        String[] dirs = {
-                "/vendor/etc/camera", "/odm/etc/camera", "/product/etc/camera",
-                "/system/etc/camera", "/system_ext/etc/camera", "/mi_ext/product/etc/camera",
-        };
-        Pattern interesting = Pattern.compile(
-                "(?i)white.?list|allow.?list|package.?name|clientname|thirdparty|3rd");
-        int hits = 0;
+        String[] dirs = {"/vendor/etc/camera", "/odm/etc/camera"};
+        List<File> textFiles = new ArrayList<>();
         for (String dir : dirs) {
-            File d = new File(dir);
             File[] files;
             try {
-                files = d.listFiles();
+                files = new File(dir).listFiles();
             } catch (Throwable t) {
                 files = null;
             }
@@ -444,29 +455,48 @@ final class Experiment {
                 say(dir + ": nicht lesbar");
                 continue;
             }
-            say(dir + ": " + files.length + " Eintraege");
-            int shown = 0;
             for (File f : files) {
-                if (shown++ < 60) say("  " + f.getName() + (f.isDirectory() ? "/" : " (" + f.length() + " B)"));
                 String lower = f.getName().toLowerCase(java.util.Locale.US);
                 boolean text = lower.endsWith(".xml") || lower.endsWith(".json")
                         || lower.endsWith(".txt") || lower.endsWith(".conf") || lower.endsWith(".cfg");
-                if (!f.isFile() || !text || f.length() > 3_000_000L || hits >= 80) continue;
-                try (BufferedReader reader = new BufferedReader(new FileReader(f))) {
-                    String line;
-                    while ((line = reader.readLine()) != null && hits < 80) {
-                        if (interesting.matcher(line).find()) {
-                            String trimmed = line.trim();
-                            if (trimmed.length() > 200) trimmed = trimmed.substring(0, 200) + "...";
-                            say("    > " + f.getName() + ": " + trimmed);
-                            hits++;
-                        }
-                    }
-                } catch (Throwable ignored) {
+                if (f.isFile() && text) {
+                    textFiles.add(f);
+                    say("  " + f.getPath() + " (" + f.length() + " B)");
                 }
             }
         }
-        if (hits == 0) say("Keine Hinweise auf App-Freigabelisten gefunden (oder Dateien nicht lesbar)");
+        say("(Der Inhalt der wichtigsten Dateien steht nur in der geteilten Datei, nicht auf dem Bildschirm.)");
+
+        String[] wanted = {"cameracustomize.json", "camxoverridesettings.txt",
+                "cameraopt_vendor.json", "cameraopt_perf.json"};
+        for (File f : textFiles) {
+            boolean dump = false;
+            for (String w : wanted) {
+                if (f.getName().equalsIgnoreCase(w)) dump = true;
+            }
+            if (!dump) continue;
+            quiet("");
+            quiet("##### DATEI " + f.getPath() + " #####");
+            int chars = 0;
+            try (BufferedReader reader = new BufferedReader(new FileReader(f))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.length() > 4000) line = line.substring(0, 4000) + "...";
+                    quiet(line);
+                    chars += line.length();
+                    if (chars > 400_000) {
+                        quiet("... (gekuerzt)");
+                        break;
+                    }
+                }
+            } catch (Throwable t) {
+                quiet("nicht lesbar: " + msg(t));
+            }
+        }
+    }
+
+    private void quiet(String s) {
+        log.append(s).append('\n');
     }
 
     // ------------------------------------------------------------------ Helfer

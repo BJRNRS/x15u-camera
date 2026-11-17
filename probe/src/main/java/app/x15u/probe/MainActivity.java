@@ -143,7 +143,7 @@ public class MainActivity extends Activity {
         running = true;
         report = "";
         savedUri = null;
-        out.setText("Aufloesungstest laeuft, App bitte offen lassen (1 bis 3 Minuten) ...\n\n");
+        out.setText("Aufloesungstest laeuft, App bitte offen lassen (3 bis 4 Minuten) ...\n\n");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         new Thread(() -> {
             String r;
@@ -157,7 +157,7 @@ public class MainActivity extends Activity {
             final String result = r;
             runOnUiThread(() -> {
                 report = result;
-                out.setText(result);
+                out.append("\nBericht bereit: jetzt \"Teilen\" antippen.\n");
                 running = false;
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             });
