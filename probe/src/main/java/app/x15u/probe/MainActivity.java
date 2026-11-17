@@ -80,7 +80,7 @@ public class MainActivity extends Activity {
         share.setOnClickListener(v -> shareReport());
 
         Button test = new Button(this);
-        test.setText("Aufloesungstest");
+        test.setText("Testfotos");
         test.setOnClickListener(v -> startExperiment());
 
         bar.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
         running = true;
         report = "";
         savedUri = null;
-        out.setText("Aufloesungstest laeuft, App bitte offen lassen (ca. 2 Minuten) ...\n\n");
+        out.setText("Testfotos laufen, Handy ruhig aufs Motiv halten (ca. 1 Minute) ...\n\n");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         new Thread(() -> {
             String r;
