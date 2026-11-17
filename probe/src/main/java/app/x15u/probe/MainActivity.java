@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
@@ -25,6 +26,7 @@ import android.provider.MediaStore;
 import android.util.Range;
 import android.util.Size;
 import android.util.SizeF;
+import android.view.TextureView;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -56,6 +58,7 @@ public class MainActivity extends Activity {
     private String report = "";
     private Uri savedUri;
     private boolean running;
+    private TextureView previewView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,6 +100,13 @@ public class MainActivity extends Activity {
 
         root.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Sichtbare Vorschau fuer den Aufloesungstest, wie in einer normalen Kamera-App.
+        previewView = new TextureView(this);
+        float density = getResources().getDisplayMetrics().density;
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(
+                (int) (160 * density), (int) (120 * density));
+        root.addView(previewView, previewParams);
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
@@ -140,15 +150,20 @@ public class MainActivity extends Activity {
 
     private void runExperiment() {
         if (running) return;
+        final SurfaceTexture texture = previewView.getSurfaceTexture();
+        if (texture == null) {
+            Toast.makeText(this, "Vorschau noch nicht bereit, bitte erneut tippen", Toast.LENGTH_LONG).show();
+            return;
+        }
         running = true;
         report = "";
         savedUri = null;
-        out.setText("Aufloesungstest laeuft, App bitte offen lassen (3 bis 4 Minuten) ...\n\n");
+        out.setText("Aufloesungstest laeuft, App bitte offen lassen (ca. 2 Minuten) ...\n\n");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         new Thread(() -> {
             String r;
             try {
-                Experiment experiment = new Experiment(this,
+                Experiment experiment = new Experiment(this, texture,
                         line -> runOnUiThread(() -> out.append(line + "\n")));
                 r = experiment.run();
             } catch (Throwable t) {
